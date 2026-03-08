@@ -179,4 +179,15 @@ class PlatformChannelService {
       debugPrint('Failed to unlock app: ${e.message}');
     }
   }
+
+  /// Get debug info from the native service
+  Future<String> getDebugInfo() async {
+    try {
+      final String result = await _channel.invokeMethod('getDebugInfo');
+      return result;
+    } on PlatformException catch (e) {
+      debugPrint('Failed to get debug info: ${e.message}');
+      return 'Error: ${e.message}';
+    }
+  }
 }

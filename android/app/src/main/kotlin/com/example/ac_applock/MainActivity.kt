@@ -13,6 +13,7 @@ import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Handler
 import android.provider.Settings
+import android.util.Log
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
@@ -22,6 +23,7 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 
 class MainActivity : FlutterFragmentActivity() {
+    private val TAG = "MainActivity"
     private val CHANNEL = "com.example.ac_applock/app_locker"
     private val LOCKED_APPS_PREFS = "app_locker_prefs"
     private val LOCKED_APPS_KEY = "locked_apps_set"
@@ -44,29 +46,52 @@ class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         
+        Log.d(TAG, "configureFlutterEngine called")
+        
         // Setup method channel - authentication will be checked in onResume
         setupMethodChannel(flutterEngine)
+        loadLockedAppsFromPrefs()
         needsAuthOnResume = !isAppAccessAllowed()
+        
+        Log.d(TAG, "Locked apps loaded: ${lockedApps.size}")
+        Log.d(TAG, "Locked apps: ${lockedApps.joinToString(", ")}")
     }
     
     private var needsAuthOnResume = false
     
+    private fun loadLockedAppsFromPrefs() {
+        val prefs = getSharedPreferences(LOCKED_APPS_PREFS, Context.MODE_PRIVATE)
+        val stored = prefs.getStringSet(LOCKED_APPS_KEY, emptySet()) ?: emptySet()
+        lockedApps.clear()
+        lockedApps.addAll(stored)
+        
+        // Also update the service
+        AppLockerService.updateLockedApps(lockedApps)
+        
+        Log.d(TAG, "Loaded ${lockedApps.size} locked apps from prefs")
+    }
+    
     private fun isAppAccessAllowed(): Boolean {
         val currentTime = System.currentTimeMillis()
-        return isAppUnlocked && (currentTime - lastUnlockTime < UNLOCK_TIMEOUT_MS)
+        val allowed = isAppUnlocked && (currentTime - lastUnlockTime < UNLOCK_TIMEOUT_MS)
+        Log.d(TAG, "isAppAccessAllowed: $allowed (isAppUnlocked=$isAppUnlocked, timeDiff=${currentTime - lastUnlockTime})")
+        return allowed
     }
     
     private fun showBiometricAuth() {
+        Log.d(TAG, "showBiometricAuth called")
         val executor = ContextCompat.getMainExecutor(this)
         
         biometricPrompt = BiometricPrompt(this, executor, object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 super.onAuthenticationError(errorCode, errString)
+                Log.d(TAG, "Biometric auth error: $errorCode - $errString")
                 finish()
             }
             
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 super.onAuthenticationSucceeded(result)
+                Log.d(TAG, "Biometric auth succeeded")
                 isAppUnlocked = true
                 lastUnlockTime = System.currentTimeMillis()
                 needsAuthOnResume = false
@@ -74,6 +99,7 @@ class MainActivity : FlutterFragmentActivity() {
             
             override fun onAuthenticationFailed() {
                 super.onAuthenticationFailed()
+                Log.d(TAG, "Biometric auth failed")
             }
         })
         
@@ -89,6 +115,8 @@ class MainActivity : FlutterFragmentActivity() {
     
     private fun setupMethodChannel(flutterEngine: FlutterEngine) {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+            Log.d(TAG, "Method call: ${call.method}")
+            
             when (call.method) {
                 "getInstalledApps" -> {
                     result.success(getInstalledApps())
@@ -137,6 +165,7 @@ class MainActivity : FlutterFragmentActivity() {
                         lockedApps.addAll(packageNames)
                         saveLockedAppsToPrefs(lockedApps)
                         AppLockerService.updateLockedApps(lockedApps)
+                        Log.d(TAG, "updateLockedApps: ${packageNames.size} apps locked")
                         result.success(true)
                     } else {
                         result.error("INVALID_ARGUMENT", "Package names list is required", null)
@@ -156,7 +185,11 @@ class MainActivity : FlutterFragmentActivity() {
                     // Lock the app immediately (require re-authentication)
                     isAppUnlocked = false
                     lastUnlockTime = 0
+                    Log.d(TAG, "lockApp called - app locked")
                     result.success(true)
+                }
+                "getDebugInfo" -> {
+                    result.success(AppLockerService.getDebugInfo())
                 }
                 else -> {
                     result.notImplemented()
@@ -283,6 +316,7 @@ class MainActivity : FlutterFragmentActivity() {
     }
     
     private fun startAppLockerService() {
+        Log.d(TAG, "startAppLockerService called")
         val intent = Intent(this, AppLockerService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
@@ -292,6 +326,7 @@ class MainActivity : FlutterFragmentActivity() {
     }
     
     private fun stopAppLockerService() {
+        Log.d(TAG, "stopAppLockerService called")
         val intent = Intent(this, AppLockerService::class.java)
         stopService(intent)
     }
@@ -333,10 +368,13 @@ class MainActivity : FlutterFragmentActivity() {
     private fun saveLockedAppsToPrefs(packageNames: Set<String>) {
         val prefs = getSharedPreferences(LOCKED_APPS_PREFS, Context.MODE_PRIVATE)
         prefs.edit().putStringSet(LOCKED_APPS_KEY, packageNames).apply()
+        Log.d(TAG, "Saved ${packageNames.size} locked apps to prefs")
     }
     
     override fun onResume() {
         super.onResume()
+        Log.d(TAG, "onResume called, needsAuthOnResume=$needsAuthOnResume")
+        
         // Use handler to delay auth check to avoid fragment transaction conflicts
         if (!isAppAccessAllowed() && needsAuthOnResume) {
             Handler(mainLooper).postDelayed({
@@ -349,7 +387,7 @@ class MainActivity : FlutterFragmentActivity() {
     
     override fun onPause() {
         super.onPause()
+        Log.d(TAG, "onPause called")
         needsAuthOnResume = true
     }
 }
-

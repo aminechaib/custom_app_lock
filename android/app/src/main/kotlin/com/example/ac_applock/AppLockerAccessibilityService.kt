@@ -1,14 +1,17 @@
 package com.example.ac_applock
 
 import android.accessibilityservice.AccessibilityService
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 
 class AppLockerAccessibilityService : AccessibilityService() {
     
     companion object {
+        private const val TAG = "AppLockerAccessService"
         var isServiceRunning = false
         
         // Package names that should not trigger lock (system UI, launcher, our app)
+        // NOTE: Package installer and permission controller are NOT here - they need to be protected!
         private val EXCLUDED_PACKAGES = setOf(
             "com.example.ac_applock",
             "android",
@@ -20,15 +23,12 @@ class AppLockerAccessibilityService : AccessibilityService() {
             "com.samsung.android.app.launcher",
             "com.samsung.android.launcher",
             "com.miui.home",
-            "com.miui.securitycenter",
             "com.coloros.launcher",
             "com.coloros.safecenter",
             "com.oppo.launcher",
             "com.vivo.launcher",
             "com.huawei.android.launcher",
-            "com.huawei.systemmanager",
             "com.oneplus.launcher",
-            "com.oneplus.security",
             // Notification panel and quick settings
             "com.android.systemui.recents",
             "com.android.systemui.statusbar",
@@ -44,23 +44,20 @@ class AppLockerAccessibilityService : AccessibilityService() {
             "com.samsung.android.app.cocktailbarservice",
             "com.samsung.android.app.taskbar",
             "com.samsung.android.smartswitchassistant",
-            // Xiaomi specific
+            // Xiaomi specific (but NOT security center - that's protected!)
             "com.miui.powerkeeper",
-            "com.miui.securitycenter.permission",
             "com.miui.systemui",
             // Media/notification related
             "com.android.providers.downloads",
-            "com.android.providers.media",
-            // Permission manager
-            "com.android.permissioncontroller",
-            "com.google.android.permissioncontroller",
-            // Package installer
-            "com.android.packageinstaller",
-            "com.google.android.packageinstaller"
+            "com.android.providers.media"
         )
         
         fun shouldIgnorePackage(packageName: String): Boolean {
             return EXCLUDED_PACKAGES.any { packageName.startsWith(it) }
+        }
+        
+        fun logDebug(msg: String) {
+            Log.d(TAG, msg)
         }
     }
 
@@ -70,6 +67,7 @@ class AppLockerAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         isServiceRunning = true
+        logDebug("onServiceConnected - Accessibility service started")
         AppLockerService.ensureStateLoaded(this)
     }
     
@@ -78,18 +76,25 @@ class AppLockerAccessibilityService : AccessibilityService() {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
         val pkg = event.packageName?.toString() ?: return
+        
+        logDebug("onAccessibilityEvent: $pkg")
 
         // Check if package is in excluded list first
         if (shouldIgnorePackage(pkg)) {
+            logDebug("Ignoring excluded package: $pkg")
             return
         }
         
         // Coalesce duplicate window events from the same package.
         val now = System.currentTimeMillis()
-        if (pkg == lastHandledPackage && (now - lastHandledAt) < 150) return
+        if (pkg == lastHandledPackage && (now - lastHandledAt) < 50) {
+            logDebug("Debounce: skipping $pkg")
+            return
+        }
         lastHandledPackage = pkg
         lastHandledAt = now
 
+        logDebug("Calling maybeLockPackage for: $pkg")
         AppLockerService.maybeLockPackage(this, pkg)
     }
     
@@ -100,6 +105,6 @@ class AppLockerAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         isServiceRunning = false
+        logDebug("onDestroy - Accessibility service stopped")
     }
 }
-

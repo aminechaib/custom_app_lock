@@ -144,6 +144,30 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _showDebugInfo() async {
+    final debugInfo = await _platformService.getDebugInfo();
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Debug Info'),
+        content: SingleChildScrollView(
+          child: Text(
+            debugInfo,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -162,6 +186,12 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: const Icon(Icons.refresh),
               onPressed: _initialize,
               tooltip: 'Refresh',
+            ),
+          if (_hasPermissions && !_isLoading)
+            IconButton(
+              icon: const Icon(Icons.bug_report),
+              onPressed: _showDebugInfo,
+              tooltip: 'Debug Info',
             ),
         ],
       ),
