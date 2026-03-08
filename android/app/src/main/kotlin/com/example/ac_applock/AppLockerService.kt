@@ -129,6 +129,11 @@ class AppLockerService : Service() {
         private var lastShownTime: Long = 0
         private const val COOLDOWN_MS = 500L // Reduced from 2000ms for faster re-locking
         
+        // Throttle: prevent checking same package too frequently
+        private var lastCheckedPackage: String? = null
+        private var lastCheckedTime: Long = 0
+        private const val CHECK_THROTTLE_MS = 1000L // Only check each package once per second
+        
         fun updateLockedApps(apps: Set<String>) {
             logDebug("updateLockedApps: $apps")
             lockedApps.clear()
@@ -203,9 +208,14 @@ class AppLockerService : Service() {
                 return false
             }
 
-            // For protected system packages, skip the "already unlocked" check and show lock
-            // This ensures Settings/Package Installer always require auth
+            // For protected system packages, check if already unlocked in session
             if (isProtectedSystemPackage) {
+                if (temporarilyUnlockedApps.contains(packageName)) {
+                    lastBypassReason = "Protected package already unlocked in session"
+                    bypassCount++
+                    logDebug("Bypass: Protected package already unlocked: $packageName")
+                    return false
+                }
                 logDebug("Showing lock for protected system package: $packageName")
                 return true
             }
@@ -280,6 +290,16 @@ class AppLockerService : Service() {
 
         fun maybeLockPackage(context: Context, packageName: String): Boolean {
             ensureStateLoaded(context)
+            
+            // Throttle: only check each package once per second
+            val currentTime = System.currentTimeMillis()
+            if (packageName == lastCheckedPackage && (currentTime - lastCheckedTime) < CHECK_THROTTLE_MS) {
+                // Already checked this package recently, skip
+                return false
+            }
+            lastCheckedPackage = packageName
+            lastCheckedTime = currentTime
+            
             onForegroundPackageChanged(packageName)
             
             logDebug("maybeLockPackage called for: $packageName")
