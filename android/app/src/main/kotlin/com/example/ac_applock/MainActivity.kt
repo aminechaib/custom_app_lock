@@ -11,6 +11,7 @@ import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.Handler
 import android.provider.Settings
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -35,9 +36,58 @@ class MainActivity : FlutterFragmentActivity() {
     private var biometricPrompt: BiometricPrompt? = null
     private var promptInfo: BiometricPrompt.PromptInfo? = null
     
+    // App access state
+    private var isAppUnlocked = false
+    private var lastUnlockTime: Long = 0
+    private val UNLOCK_TIMEOUT_MS = 5 * 60 * 1000L // 5 minutes
+    
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         
+        // Setup method channel - authentication will be checked in onResume
+        setupMethodChannel(flutterEngine)
+        needsAuthOnResume = !isAppAccessAllowed()
+    }
+    
+    private var needsAuthOnResume = false
+    
+    private fun isAppAccessAllowed(): Boolean {
+        val currentTime = System.currentTimeMillis()
+        return isAppUnlocked && (currentTime - lastUnlockTime < UNLOCK_TIMEOUT_MS)
+    }
+    
+    private fun showBiometricAuth() {
+        val executor = ContextCompat.getMainExecutor(this)
+        
+        biometricPrompt = BiometricPrompt(this, executor, object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                super.onAuthenticationError(errorCode, errString)
+                finish()
+            }
+            
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                super.onAuthenticationSucceeded(result)
+                isAppUnlocked = true
+                lastUnlockTime = System.currentTimeMillis()
+                needsAuthOnResume = false
+            }
+            
+            override fun onAuthenticationFailed() {
+                super.onAuthenticationFailed()
+            }
+        })
+        
+        promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("App Locker")
+            .setSubtitle("Authenticate to access app settings")
+            .setNegativeButtonText("Cancel")
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            .build()
+        
+        biometricPrompt?.authenticate(promptInfo!!)
+    }
+    
+    private fun setupMethodChannel(flutterEngine: FlutterEngine) {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getInstalledApps" -> {
@@ -99,9 +149,14 @@ class MainActivity : FlutterFragmentActivity() {
                     val packageName = call.argument<String>("packageName")
                     currentLockedPackage = packageName
                     authenticateWithBiometric { success ->
-                        // Just return success - lock screen handles unlocking
                         result.success(success)
                     }
+                }
+                "lockApp" -> {
+                    // Lock the app immediately (require re-authentication)
+                    isAppUnlocked = false
+                    lastUnlockTime = 0
+                    result.success(true)
                 }
                 else -> {
                     result.notImplemented()
@@ -116,7 +171,6 @@ class MainActivity : FlutterFragmentActivity() {
         val apps = mutableListOf<Map<String, Any?>>()
         
         for (packageInfo in packages) {
-            // Filter to show only user-installed third-party apps (not system apps)
             val isUserApp = (packageInfo.flags and ApplicationInfo.FLAG_SYSTEM) == 0
             
             if (isUserApp) {
@@ -124,7 +178,6 @@ class MainActivity : FlutterFragmentActivity() {
                     val appName = pm.getApplicationLabel(packageInfo).toString()
                     val packageName = packageInfo.packageName
                     
-                    // Skip our own app
                     if (packageName != this.packageName) {
                         apps.add(mapOf(
                             "packageName" to packageName,
@@ -264,7 +317,6 @@ class MainActivity : FlutterFragmentActivity() {
             
             override fun onAuthenticationFailed() {
                 super.onAuthenticationFailed()
-                // Don't call callback here - let user retry
             }
         })
         
@@ -281,6 +333,23 @@ class MainActivity : FlutterFragmentActivity() {
     private fun saveLockedAppsToPrefs(packageNames: Set<String>) {
         val prefs = getSharedPreferences(LOCKED_APPS_PREFS, Context.MODE_PRIVATE)
         prefs.edit().putStringSet(LOCKED_APPS_KEY, packageNames).apply()
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        // Use handler to delay auth check to avoid fragment transaction conflicts
+        if (!isAppAccessAllowed() && needsAuthOnResume) {
+            Handler(mainLooper).postDelayed({
+                if (!isFinishing && !isAppAccessAllowed()) {
+                    showBiometricAuth()
+                }
+            }, 500)
+        }
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        needsAuthOnResume = true
     }
 }
 

@@ -7,8 +7,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -50,7 +52,35 @@ class AppLockerService : Service() {
             "com.huawei.android.launcher",
             "com.huawei.systemmanager",
             "com.oneplus.launcher",
-            "com.oneplus.security"
+            "com.oneplus.security",
+            // Notification panel and quick settings
+            "com.android.systemui.recents",
+            "com.android.systemui.statusbar",
+            "com.android.systemui.navbar",
+            "com.android.systemui.volume",
+            "com.android.systemui.editorservices",
+            "com.android.systemui.gesture",
+            // Quick settings and panel
+            "com.android.quicksearchbox",
+            "com.android.quicksettings",
+            "com.android.panel",
+            // Samsung specific system UI
+            "com.samsung.android.app.cocktailbarservice",
+            "com.samsung.android.app.taskbar",
+            "com.samsung.android.smartswitchassistant",
+            // Xiaomi specific
+            "com.miui.powerkeeper",
+            "com.miui.securitycenter.permission",
+            "com.miui.systemui",
+            // Media/notification related
+            "com.android.providers.downloads",
+            "com.android.providers.media",
+            // Permission manager
+            "com.android.permissioncontroller",
+            "com.google.android.permissioncontroller",
+            // Package installer
+            "com.android.packageinstaller",
+            "com.google.android.packageinstaller"
         )
 
         // Settings and uninstall entry points that should always be protected.
@@ -91,6 +121,22 @@ class AppLockerService : Service() {
         fun onLockScreenDismissed() {
             isLockScreenActive = false
             lastShownTime = System.currentTimeMillis()
+        }
+        
+        // Called when device screen is turned off
+        fun onScreenOff() {
+            // Lock all apps when screen turns off - require re-authentication
+            temporarilyUnlockedApps.clear()
+            lastShownTime = System.currentTimeMillis()
+            isLockScreenActive = false
+        }
+        
+        // Called when device screen is turned on
+        fun onScreenOn() {
+            // Ensure lock screen can be shown again
+            isLockScreenActive = false
+            // Keep temporarilyUnlockedApps cleared for security
+            // User must re-authenticate after screen on
         }
         
         // Called when user navigates away from locked app
@@ -176,6 +222,17 @@ class AppLockerService : Service() {
     private var isMonitoring = false
     private val monitorIntervalMs = 1000L
     
+    // Screen on/off receiver
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                onScreenOff()
+            } else if (intent?.action == Intent.ACTION_SCREEN_ON) {
+                onScreenOn()
+            }
+        }
+    }
+    
     private val monitorRunnable = object : Runnable {
         override fun run() {
             if (isMonitoring) {
@@ -188,6 +245,18 @@ class AppLockerService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        registerScreenReceiver()
+    }
+    
+    private fun registerScreenReceiver() {
+        val filter = IntentFilter()
+        filter.addAction(Intent.ACTION_SCREEN_OFF)
+        filter.addAction(Intent.ACTION_SCREEN_ON)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(screenReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(screenReceiver, filter)
+        }
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -204,6 +273,11 @@ class AppLockerService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopMonitoring()
+        try {
+            unregisterReceiver(screenReceiver)
+        } catch (e: Exception) {
+            // Receiver not registered
+        }
     }
     
     private fun startMonitoring() {
